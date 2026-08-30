@@ -68,6 +68,32 @@ WORKSPACE_MAX_RADIUS = 0.55
 WORKSPACE_MIN_CLEARANCE = 0.12  # minimum center-to-center distance kept between any 2 plates when randomizing, so they don't spawn overlapping/stacked
 
 # ---------------------------------------------------------------------
+# CURRICULUM LEARNING: train the "close the final gap precisely" skill
+# on an easy (small, mostly-no-search-needed) radius first, then widen
+# it in stages once the arm is reliably succeeding. This targets a
+# specific observed failure mode: training directly on the full
+# WORKSPACE_MIN_RADIUS..WORKSPACE_MAX_RADIUS range from a cold start
+# produced a policy that could FIND plates (high visibility %) but
+# never closed the last ~0.7-1.1m down to the 0.05m success threshold -
+# it was being asked to solve "search a wide area" and "arrive with
+# precision" simultaneously. Each stage below keeps min_radius fixed
+# (so there's always at least a little searching to do) and widens
+# max_radius, so the precision skill is learned first in an easier
+# setting, then has to generalize to a larger search area on top of
+# an already-working "close the gap" behavior, rather than learning
+# both at once.
+#
+# train.py trains ONE stage per run (see CURRENT_STAGE in train.py) -
+# advancing stages is a manual decision once you've checked evaluate.py
+# results look solid for the current stage, not automatic.
+# ---------------------------------------------------------------------
+CURRICULUM_STAGES = [
+    {"name": "stage0_close",  "min_radius": 0.18, "max_radius": 0.25},
+    {"name": "stage1_mid",    "min_radius": 0.18, "max_radius": 0.40},
+    {"name": "stage2_full",   "min_radius": WORKSPACE_MIN_RADIUS, "max_radius": WORKSPACE_MAX_RADIUS},
+]
+
+# ---------------------------------------------------------------------
 # PYRAMID TARGET POSES: where each plate should end up, stacked largest
 # on the bottom to smallest on top, centered at the build point.
 # z is computed by stacking each plate directly on top of the previous

@@ -18,6 +18,18 @@ from plate_classifier import load_model, predict, MODEL_PATH
 
 CONFIDENCE_THRESHOLD = 0.6
 
+# Sanity bound for unprojected detection positions: a plate physically
+# cannot be farther than this from the arm's own base, since it's
+# spawned inside config.WORKSPACE_MAX_RADIUS. A detection landing outside
+# this (observed: several METERS away, even negative coordinates) means
+# OpenCV's saturation mask + the CNN both confidently agreed on a false
+# positive (checkerboard floor pattern, a shadow, etc) - low-res 64x64
+# frames make this more likely. Treating these as "not detected" instead
+# of trusting them matters a lot: an ungated garbage position was letting
+# the policy farm reward from the alignment bonus by facing toward
+# nonsense far-away points instead of actually approaching the plate.
+MAX_PLAUSIBLE_DETECTION_RADIUS = 1.0  # meters from arm base; generous margin above WORKSPACE_MAX_RADIUS
+
 _model = None
 
 
@@ -79,6 +91,11 @@ def detect_plates_from_arm(arm_controller, width=256, height=256):
             for py, px in zip(ys.flatten(), xs.flatten())
         ])
         centroid = world_points.mean(axis=0)
+
+        # Plausibility filter - see MAX_PLAUSIBLE_DETECTION_RADIUS comment above.
+        dist_from_base = float(np.linalg.norm(centroid - np.array(arm_controller.base_position)))
+        if dist_from_base > MAX_PLAUSIBLE_DETECTION_RADIUS:
+            continue
 
         detections.append({
             "plate_index": plate_index,

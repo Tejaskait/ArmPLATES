@@ -8,10 +8,21 @@ import numpy as np
 
 
 class ArmController:
+    # A commonly-used Franka Panda "ready" pose: elbow bent down, wrist
+    # facing forward/down toward a work surface - NOT the raw URDF
+    # default (which is a fairly upright, extended pose with no
+    # particular reach direction). Spawning here every episode instead of
+    # the raw default means the policy starts already oriented toward
+    # the floor-height plates it needs to reach, rather than having to
+    # rediscover "bend all the way down" through trial and error from an
+    # unhelpful pose on every single episode.
+    READY_POSE = [0.0, -0.4, 0.0, -2.6, 0.0, 2.0, 0.8]
+
     def __init__(self, urdf_path, base_position, name, component, target_position):
         self.name = name
         self.component = component
         self.target_position = target_position
+        self.base_position = base_position  # used to sanity-check detected plate positions aren't physically impossible
 
         self.body_id = p.loadURDF(urdf_path, basePosition=base_position, useFixedBase=True)
         self.num_joints = p.getNumJoints(self.body_id)
@@ -35,6 +46,12 @@ class ArmController:
 
         self.has_gripper = len(self.finger_joint_indices) > 0
         self.state = "IDLE"
+
+        # Snap straight to the ready pose (resetJointState, not
+        # move_to_pose's motor control) so the episode starts there
+        # immediately rather than spending steps driving toward it.
+        for idx, angle in zip(self.arm_joint_indices, self.READY_POSE):
+            p.resetJointState(self.body_id, idx, targetValue=angle)
 
     def move_to_pose(self, joint_targets):
         for idx, angle in zip(self.arm_joint_indices, joint_targets):

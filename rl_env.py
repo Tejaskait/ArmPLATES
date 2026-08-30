@@ -65,13 +65,16 @@ from cv_detector import detect_plates_from_arm
 class ArmReachEnv(gym.Env):
     def __init__(self, arm_index=0, render=False, max_steps=500, randomize_arm=False,
                  randomize_target_plate=True, randomize_plate_positions=True,
-                 camera_width=128, camera_height=128):
+                 camera_width=128, camera_height=128,
+                 workspace_min_radius=WORKSPACE_MIN_RADIUS, workspace_max_radius=WORKSPACE_MAX_RADIUS):
         super().__init__()
 
         self.arm_index = arm_index          # which entry in config.ARMS this env controls (only 1 arm exists now, so always 0)
         self.randomize_arm = randomize_arm  # kept for API compatibility; with 1 arm in ARMS this is a no-op
         self.randomize_target_plate = randomize_target_plate  # if True, picks a random one of the 4 plates as the reach target each reset
         self.randomize_plate_positions = randomize_plate_positions  # if True, samples a fresh spot for every plate each reset instead of using config.py's fixed spawn_position
+        self.workspace_min_radius = workspace_min_radius  # overridable so train.py can pass a curriculum stage's narrower range (see config.CURRICULUM_STAGES) instead of always the full workspace
+        self.workspace_max_radius = workspace_max_radius
         self.render_mode = render
         self.max_steps = max_steps
         self.step_count = 0
@@ -90,8 +93,9 @@ class ArmReachEnv(gym.Env):
 
         self.success_threshold = 0.05  # meters - "close enough" to count as reached
         self.alignment_threshold = 0.85  # cosine similarity - how directly the gripper must face the plate to count as "success" (1.0 = perfectly facing, 0 = perpendicular). 0.85 ~= within ~32 degrees.
-        self.not_visible_penalty = 1.0  # extra reward penalty per step target isn't detected
-        self.alignment_reward_weight = 2.0  # scales how much facing the plate matters vs. just being close
+        self.not_visible_penalty = 0.5  # extra reward penalty per step target isn't detected (lowered from 1.0 - at that level it was comparable to or larger than the reward gained by closing another 0.1-0.2m of distance, which combined with near_field_radius rarely activating, incentivized "park at a safely-visible distance" over pushing closer)
+        self.alignment_reward_weight = 0.3  # small - alignment is a tiebreaker near the target, never a substitute for closing distance (was 2.0, which let noisy far-away detections outweigh -distance entirely - a reward-hacking bug)
+        self.near_field_radius = 0.6  # meters - widened from 0.3: eval showed policies converging to a 0.4-0.9m "safe distance" equilibrium and never entering the old 0.3m gate at all, so the fine-approach/hold incentive never activated for almost any episode. Widening it means getting closer starts paying off well before the final few centimeters, instead of only after crossing a threshold the policy was never reaching.
 
         self._last_seen_target_pos = np.zeros(3, dtype=np.float32)
 
@@ -109,7 +113,7 @@ class ArmReachEnv(gym.Env):
         for cfg in PLATES:
             z = cfg["half_extents"][2]  # rest flat on the ground plane
             for _ in range(50):  # generous retry budget - annulus is roomy relative to clearance
-                radius = self.np_random.uniform(WORKSPACE_MIN_RADIUS, WORKSPACE_MAX_RADIUS)
+                radius = self.np_random.uniform(self.workspace_min_radius, self.workspace_max_radius)
                 angle = self.np_random.uniform(0, 2 * np.pi)
                 x = base_x + radius * np.cos(angle)
                 y = base_y + radius * np.sin(angle)
@@ -240,7 +244,7 @@ class ArmReachEnv(gym.Env):
         reward = -distance
         if not visible:
             reward -= self.not_visible_penalty
-        else:
+        elif distance < self.near_field_radius:
             reward += self.alignment_reward_weight * alignment
 
         success = bool(visible and distance < self.success_threshold and alignment > self.alignment_threshold)

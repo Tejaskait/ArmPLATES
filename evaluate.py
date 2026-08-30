@@ -15,7 +15,8 @@ import pybullet as p
 from stable_baselines3 import PPO
 
 from rl_env import ArmReachEnv
-from config import PLATES
+from config import PLATES, CURRICULUM_STAGES
+from train import CURRENT_STAGE_INDEX, final_model_path_for
 
 
 def get_camera_image(width=320, height=240):
@@ -38,12 +39,20 @@ def get_camera_image(width=320, height=240):
     return img  # (width, height, rgba, depth, segmentation)
 
 
-def main(model_path="models/arm_1_reach_policy", episodes_per_plate=2, print_every=10):
-    # IMPORTANT: these must match what train.py used, or you're evaluating
-    # a policy under different conditions than it was trained on.
-    env = ArmReachEnv(arm_index=0, render=True, max_steps=250,
+def main(model_path=None, episodes_per_plate=2, print_every=10, stage_index=CURRENT_STAGE_INDEX):
+    stage = CURRICULUM_STAGES[stage_index]
+    if model_path is None:
+        model_path = final_model_path_for(stage["name"])
+    print(f"Evaluating stage '{stage['name']}' (radius {stage['min_radius']}m-{stage['max_radius']}m): {model_path}.zip")
+
+    # IMPORTANT: these must match what train.py used for this stage, or
+    # you're evaluating a policy under different conditions than it
+    # trained on.
+    env = ArmReachEnv(arm_index=0, render=True, max_steps=400,
                        randomize_plate_positions=True,
-                       camera_width=64, camera_height=64)
+                       camera_width=64, camera_height=64,
+                       workspace_min_radius=stage["min_radius"],
+                       workspace_max_radius=stage["max_radius"])
     model = PPO.load(model_path)
 
     for plate_index in range(len(PLATES)):
